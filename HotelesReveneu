@@ -1,0 +1,80 @@
+package com.utad.bigdata
+
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.{Row, SaveMode, SparkSession}
+import org.apache.spark.sql.functions._
+
+object HotelesReveneu {
+
+  def main(args: Array[String]) {
+    // $example on:init_session$
+    val spark = SparkSession
+      .builder()
+      .appName("Spark SQL basic example")
+      .config("spark.sql.crossJoin.enabled", "true")
+      .master("local[2]")
+      .getOrCreate()
+
+    runProgrammaticSchemaExample(spark)
+    spark.stop()
+  }
+
+  private def runProgrammaticSchemaExample(spark: SparkSession): Unit = {
+    // $example on:programmatic_schema$
+    // Create an RDD
+    val hotelesRDD = spark.sparkContext.textFile("/home/ros01507/Descargas/Ejercicio_Entrevista/europe.csv")
+    val revenueRDD = spark.sparkContext.textFile("/home/ros01507/Descargas/Ejercicio_Entrevista/revenue.csv")
+
+    // The schema is encoded in a string
+    val schemaStringH = "id;name;address;zip;city_hotel;cc1;ufi;class;currencycode;minrate;maxrate;preferred;" +
+      "nr_rooms;public_ranking;hotel_url;city_unique;city_preferred;review_score;review_nr"
+    val schemaStringG = "id;revenue"
+
+    // Generate the schema based on the string of schema
+    val fieldsH = schemaStringH.split(";")
+      .map(fieldName => StructField(fieldName, StringType, nullable = true))
+
+    val fieldsG = schemaStringG.split(";")
+      .map(fieldName => StructField(fieldName, IntegerType, nullable = true))
+
+    val schemaH = StructType(fieldsH)
+    val schemaG = StructType(fieldsG)
+
+    // Convert records of the RDD (people) to Rows
+    val hotelesrowRDD = hotelesRDD
+      .map(_.split(";"))
+      .map(attributes => Row(attributes(0).trim, attributes(1).trim, attributes(2).trim, attributes(3)
+      .trim, attributes(4).trim,attributes(5).trim, attributes(6).trim, attributes(7).trim, attributes(8)
+      .trim,attributes(9).trim, attributes(10).trim, attributes(11).trim,attributes(12).trim,attributes(13)
+      .trim,attributes(14).trim,attributes(15).trim,attributes(16).trim, attributes(17).trim,attributes(18).trim))
+
+    val revenrowRDD = revenueRDD
+      .map(_.split(";"))
+      .map(attributes => Row(attributes(0).trim.toInt, attributes(1).trim.toInt))
+
+    // Apply the schema to the RDD
+    val hotelDF = spark.createDataFrame(hotelesrowRDD, schemaH)
+    val revenDF = spark.createDataFrame(revenrowRDD, schemaG)
+
+    // Creates a temporary view using the DataFrame
+    hotelDF.createOrReplaceTempView("hoteles")
+    revenDF.createOrReplaceTempView("revenue")
+
+    // Guardamos en formato parquet en HDFS
+    hotelDF.write.mode(SaveMode.Append).parquet("hdfs://localhost:9000/user/hoteles/europe");
+    revenDF.write.mode(SaveMode.Append).parquet("hdfs://localhost:9000/user/hoteles/revenue");
+
+    // SQL can be run over a temporary view created using DataFrames
+    val Hoteles = spark.sql("SELECT id,name,city_hotel,cc1 FROM hoteles").filter(row => row(3) == "es")
+    val Revenue = spark.sql("SELECT * FROM revenue")
+
+    // The results of SQL queries are DataFrames and support all the normal RDD operations
+    // The columns of a row in the result can be accessed by field index or by field name
+    val queryPorRevenue = Hoteles.join(Revenue, Hoteles.col("id") === Revenue("id"), "right_outer")
+      .orderBy(desc("revenue")).show(100)
+
+    val queryPorRevenueCiudad = Hoteles.join(Revenue, Hoteles.col("id") === Revenue("id"), "right_outer")
+      .groupBy("city_hotel").agg(sum("revenue").as("TotalRevenue")).orderBy(desc("TotalRevenue")).show(200)
+
+          }
+}
